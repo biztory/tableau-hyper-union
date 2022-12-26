@@ -1,6 +1,9 @@
 # tableau-hyper-union
 A Python script to quickly union all Hyper extracts in a folder, into a single Hyper file. When using its executable form, you should be able to just drop it in a folder with extracts, run it, and find `union.hyper` containing the data from all extracts combined. Well, "unioned".
 
+* For "end users": download the executable from the [releases page](https://github.com/biztory/tableau-hyper-union/releases).
+* For developers: clone/fork the source and feel free to contribute.
+
 ## Usage
 
 Automatically operates on/unions all `.hyper` files in the directory _in which it is run_. Aside from that, its execution can be influenced with these parameters:

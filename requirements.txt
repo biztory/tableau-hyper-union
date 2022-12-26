@@ -1,0 +1,10 @@
+altgraph==0.17.3
+cffi==1.15.1
+future==0.18.2
+pefile==2022.5.30
+pycparser==2.21
+pyinstaller==5.7.0
+pyinstaller-hooks-contrib==2022.14
+pywin32==305
+pywin32-ctypes==0.2.0
+tableauhyperapi==0.0.16123

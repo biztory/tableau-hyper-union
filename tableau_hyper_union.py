@@ -38,7 +38,7 @@ if args.log_to_file:
     logger.addHandler(log_file_handler)
 
 # Let's go
-logger.info("Biztory tableau_hyper_union.py v0.1")
+logger.info("Biztory tableau_hyper_union.py v0.2")
 logger.info("Author: Timothy Vermeiren")
 logger.info(f"Script launched using (quotes removed): { sys.executable } { sys.argv[0] } { ' '.join([a for i, a in enumerate(sys.argv[1:])]) }")
 
@@ -52,7 +52,6 @@ else:
 logger.info(f"Assimilated { len(worklist) } Hyper files to be processed.")
 
 output_dict = {} # "Structure" is a dict of dicts of dicts going schema > table > column. Used mostly for comparing.
-output_dict_definitions = {} # Same as the above, but contains the definitions to actually create the things.
 
 if args.log_to_file:
     hyper_process_parameters = { "log_dir": str(logs_directory) }
@@ -63,10 +62,12 @@ else:
 
 with THA.HyperProcess(telemetry=THA.Telemetry.SEND_USAGE_DATA_TO_TABLEAU, parameters=hyper_process_parameters) as hyper:
 
+    # Pre-process the files, so we know which schemas and tables we need to go through. We also need to know about columns, because UNION might complain otherwise
+
     for hyper_file in worklist:
         try:
             with THA.Connection(endpoint=hyper.endpoint, database=hyper_file) as connection:
-                logger.info(f"Processing database/file { hyper_file }:")
+                logger.info(f"Assimilating database/file { hyper_file }:")
 
                 # Schemas are the top level
                 for schema in connection.catalog.get_schema_names():
@@ -107,91 +108,65 @@ with THA.HyperProcess(telemetry=THA.Telemetry.SEND_USAGE_DATA_TO_TABLEAU, parame
     logger.info("Assimilated aforementioned files. Creating definitions and applying in output file.")
 
     try:
-        with THA.Connection(endpoint=hyper.endpoint, database=output_file, create_mode=THA.CreateMode.CREATE_AND_REPLACE) as connection_output:
+        # Remove the output file in any case
+        if os.path.exists(output_file):
+            os.remove(output_file)
+
+        # We do not specify a database, because we'll connect to ("attach") all input files as well as the output file at once.
+        with THA.Connection(endpoint=hyper.endpoint) as connection:
+
+            # Preparation of the output and the inputs
+            connection.catalog.create_database(database_path=output_file)
+            connection.catalog.attach_database(database_path=output_file, alias="union_output")
+            for file in worklist:
+                connection.catalog.attach_database(database_path=file)
 
             for schema in output_dict:
 
-                connection_output.catalog.create_schema_if_not_exists(schema=schema)
-                
+                # Now refer to this schema as part of the output
+                output_schema = THA.SchemaName("union_output", schema)
+                connection.catalog.create_schema_if_not_exists(schema=output_schema)
+
                 for table in output_dict[schema]:
+                
+                    union_query = f"CREATE TABLE \"union_output\".{ THA.escape_name(schema.name) }.{ THA.escape_name(table.name) } AS\n"
 
-                    try:
+                    for index, file in enumerate(worklist):
+                        file_database_name = file.split(".")[:-1][0]
+                        table_input = THA.TableName(file_database_name, table.schema_name, table.name)
 
-                        # Add a column to this table, specifying the source file name, if we opted to do so. And if it didn't exist yet.
-                        if len(args.source_file_column_name) > 0 and len([column for column in output_dict[schema][table] if THA.escape_name(column.name) == THA.escape_name(args.source_file_column_name)]) < 1:
-                            output_dict[schema][table].append(THA.TableDefinition.Column(name=args.source_file_column_name, type=THA.SqlType.text(), nullability=THA.Nullability.NOT_NULLABLE))
-
-                        table_definition = THA.TableDefinition(
-                            table_name=THA.TableName(table),
-                            columns=[
-                                THA.TableDefinition.Column(
-                                    name=column.name,
-                                    type=column.type,
-                                    # nullability=column.nullability,
-                                    nullability=THA.Nullability.NULLABLE, # We might argue that by definition, all columns have to be nullable because we're creating a union and we don't know if columns are always present!
-                                    collation=column.collation
-                                ) for column in output_dict[schema][table]
-                            ]
-                        )
-
-                        connection_output.catalog.create_table_if_not_exists(table_definition=table_definition)
-                        logger.info(f"Table { table } created in output file. Inserting data from source files.")
-
-                    except Exception as e:
-                        logger.error(f"There was a problem defining and creating the target table { table }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
-                        input("Press Enter to continue...")
-
-                    for hyper_file in worklist:
-
+                        # We do not create the table and its definitions beforehand; it is cumbersome. Rather, we'll use CREATE ... AS with the output from the UNION query we put together
                         try:
-                            with THA.Connection(endpoint=hyper.endpoint, database=hyper_file) as connection:
-                                logger.info(f"\tIngesting database/file { hyper_file }.")
-                                if schema in connection.catalog.get_schema_names() and table in connection.catalog.get_table_names(schema=schema):
-                                    # Build the query in a very... "special" way. I wonder how robust this is.
-                                    try:
-                                        query = "SELECT "
-                                        for column in table_definition.columns:
-                                            if column.name in [column.name for column in connection.catalog.get_table_definition(name=table).columns] and THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
-                                                # Source extract has this column (too)
-                                                query += f" { THA.escape_name(column.name) },"
-                                            elif THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
-                                                # Source extract does not have this column
-                                                query += f" NULL as { THA.escape_name(column.name) },"
-                                        if len(args.source_file_column_name) > 0: # If we must add the file name
-                                            if hyper_file != args.output_file:
-                                                query += f" '{ hyper_file }' as { args.source_file_column_name },"
-                                            else:
-                                                query += f" { THA.escape_name(args.source_file_column_name) } as { args.source_file_column_name },"
-                                        # Pinch off the last comma we added (I know, it's dumb, but it works)
-                                        query = query[:-1]
-                                        query += f" FROM { THA.escape_name(schema.name) }.{ THA.escape_name(table.name) }"
-                                        logger.debug(f"\t\tResulting query:{ query }")
-                                    except Exception as e:
-                                        logger.error(f"There was a problem building the query to read the data from table { table }in file { hyper_file }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
-                                        if query in locals():
-                                            logger.error(f"The query we built so far was:\n\t{ query }")
-                                        input("Press Enter to continue...")
-                                    try:
-                                        rows_to_insert = connection.execute_list_query(query=query)
-                                    except Exception as e:
-                                        logger.error(f"There was a problem executing the query to read data from { table } in file { hyper_file }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
-                                        input("Press Enter to continue...")
-                                    try:
-                                        with THA.Inserter(connection_output, table_definition) as inserter:
-                                            inserter.add_rows(rows=rows_to_insert)
-                                            inserter.execute()
-                                    except Exception as e:
-                                        logger.error(f"There was a problem inserting data from table { table } from file { hyper_file }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
-                                        input("Press Enter to continue...")
-                                    logger.info(f"\t\tInserted { len(rows_to_insert) } rows from this file.")
-                                    
+                            union_query += "SELECT"
+                            for column in output_dict[schema][table]:
+                                if column.name in [column.name for column in connection.catalog.get_table_definition(name=table_input).columns] and THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
+                                    # Source extract has this column (too)
+                                    union_query += f" { THA.escape_name(column.name) },"
+                                elif THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
+                                    # Source extract does not have this column
+                                    union_query += f" NULL as { THA.escape_name(column.name) },"
+                            if len(args.source_file_column_name) > 0: # If we must add the file name
+                                if file != args.output_file:
+                                    union_query += f" '{ file }' as { args.source_file_column_name },"
                                 else:
-                                    logger.info("Table does not appear in this Hyper file; skipping.")
-                        
+                                    union_query += f" { THA.escape_name(args.source_file_column_name) } as { args.source_file_column_name },"
+                            # Pinch off the last comma we added (I know, it's dumb, but it works)
+                            union_query = union_query[:-1]
+                            union_query += f" FROM { THA.escape_name(file_database_name) }.{ THA.escape_name(schema.name) }.{ THA.escape_name(table_input.name) }"
+                            # Add UNION ALL if not the last one. There are more Pythonic ways but leave me alone.
+                            if index != len(worklist) - 1:
+                                union_query += f"\nUNION ALL\n"
                         except Exception as e:
-                            logger.error(f"There was a problem assimilating the file { hyper_file } into the extract. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
+                            logger.error(f"There was a problem building the query to read the data from table { table } in file { file }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
+                            if union_query in locals():
+                                logger.error(f"The query we built so far was:\n\t{ union_query }")
                             input("Press Enter to continue...")
-        
+
+                    logger.debug(f"Resulting query for table { table }:\n{ union_query }")
+                    logger.info(f"Performing UNION ALL for {schema.name}.{table_input.name}.")
+                    # "Process" this table
+                    connection.execute_command(union_query)
+
         if output_file != args.output_file:
             logger.info("We wrote the output to a temporary file to also assimilate the original output file's content. Cleaning up.")
             os.remove(args.output_file)

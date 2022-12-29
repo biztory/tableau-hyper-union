@@ -132,38 +132,47 @@ with THA.HyperProcess(telemetry=THA.Telemetry.SEND_USAGE_DATA_TO_TABLEAU, parame
                     union_query = f"CREATE TABLE \"union_output\".{ THA.escape_name(schema.name) }.{ THA.escape_name(table.name) } AS\n"
 
                     for index, file in enumerate(worklist):
-                        file_database_name = file.split(".")[:-1][0]
-                        table_input = THA.TableName(file_database_name, table.schema_name, table.name)
 
-                        # We do not create the table and its definitions beforehand; it is cumbersome. Rather, we'll use CREATE ... AS with the output from the UNION query we put together
-                        try:
-                            union_query += "SELECT"
-                            for column in output_dict[schema][table]:
-                                if column.name in [column.name for column in connection.catalog.get_table_definition(name=table_input).columns] and THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
-                                    # Source extract has this column (too)
-                                    union_query += f" { THA.escape_name(column.name) },"
-                                elif THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
-                                    # Source extract does not have this column
-                                    union_query += f" NULL as { THA.escape_name(column.name) },"
-                            if len(args.source_file_column_name) > 0: # If we must add the file name
-                                if file != args.output_file:
-                                    union_query += f" '{ file }' as { args.source_file_column_name },"
-                                else:
-                                    union_query += f" { THA.escape_name(args.source_file_column_name) } as { args.source_file_column_name },"
-                            # Pinch off the last comma we added (I know, it's dumb, but it works)
-                            union_query = union_query[:-1]
-                            union_query += f" FROM { THA.escape_name(file_database_name) }.{ THA.escape_name(schema.name) }.{ THA.escape_name(table_input.name) }"
-                            # Add UNION ALL if not the last one. There are more Pythonic ways but leave me alone.
-                            if index != len(worklist) - 1:
-                                union_query += f"\nUNION ALL\n"
-                        except Exception as e:
-                            logger.error(f"There was a problem building the query to read the data from table { table } in file { file }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
-                            if union_query in locals():
-                                logger.error(f"The query we built so far was:\n\t{ union_query }")
-                            input("Press Enter to continue...")
+                        file_database_name = file.split(".")[:-1][0]
+                        schema_input = THA.SchemaName(file_database_name, table.schema_name)
+
+                        # Comparing tuples is easier as it omits the database name, TableName() doesn't.
+                        if (table.schema_name.name, table.name) in [(table_input.schema_name.name, table_input.name) for table_input in connection.catalog.get_table_names(schema=schema_input)]:
+
+                            table_input = THA.TableName(file_database_name, table.schema_name, table.name)
+
+                            # We do not create the table and its definitions beforehand; it is cumbersome. Rather, we'll use CREATE ... AS with the output from the UNION query we put together
+                            try:
+                                union_query += "SELECT"
+                                for column in output_dict[schema][table]:
+                                    if column.name in [column.name for column in connection.catalog.get_table_definition(name=table_input).columns] and THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
+                                        # Source extract has this column (too)
+                                        union_query += f" { THA.escape_name(column.name) },"
+                                    elif THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
+                                        # Source extract does not have this column
+                                        union_query += f" NULL as { THA.escape_name(column.name) },"
+                                if len(args.source_file_column_name) > 0: # If we must add the file name
+                                    if file != args.output_file:
+                                        union_query += f" '{ file }' as { args.source_file_column_name },"
+                                    else:
+                                        union_query += f" { THA.escape_name(args.source_file_column_name) } as { args.source_file_column_name },"
+                                # Pinch off the last comma we added (I know, it's dumb, but it works)
+                                union_query = union_query[:-1]
+                                union_query += f" FROM { THA.escape_name(file_database_name) }.{ THA.escape_name(schema.name) }.{ THA.escape_name(table_input.name) }"
+                                # Add UNION ALL if not the last one. There are more Pythonic ways but leave me alone.
+                                if index != len(worklist) - 1:
+                                    union_query += f"\nUNION ALL\n"
+                            except Exception as e:
+                                logger.error(f"There was a problem building the query to read the data from table { table } in file { file }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
+                                if union_query in locals():
+                                    logger.error(f"The query we built so far was:\n\t{ union_query }")
+                                input("Press Enter to continue...")
+                        
+                        else:
+                            logger.info(f"Table { table.name } is not present in file { file }; omitting it from the UNION query.")
 
                     logger.debug(f"Resulting query for table { table }:\n{ union_query }")
-                    logger.info(f"Performing UNION ALL for {schema.name}.{table_input.name}.")
+                    logger.info(f"Performing UNION ALL for {schema.name}.{table.name}.")
                     # "Process" this table
                     connection.execute_command(union_query)
 

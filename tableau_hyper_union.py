@@ -1,7 +1,7 @@
 import argparse
 import logging, traceback
 import logging.handlers # For RotatingFileHandler
-import os, sys, datetime, time, glob, tempfile
+import os, sys, datetime, time, glob, tempfile, re
 from pathlib import Path
 import tableauhyperapi as THA
 
@@ -23,6 +23,7 @@ parser.add_argument("--output-file", "-o", dest="output_file", required=False, d
 parser.add_argument("--preserve-output-file", "-p", dest="preserve_output_file", default=False, action="store_true", help="When this argument is specified, the script will preserve the output of the output file and append to the existing contents. When not specified (i.e. the default behavior), it will first clear the contents of said output file.")
 parser.add_argument("--source-file-column-name", "-c", dest="source_file_column_name", default="source_file", type=str, help="Used to add a column to each table, containing the name of the Hyper file the data was sourced from. The column can be omitted altogether by specifying an empty string here: \"\". Otherwise, the default is \"source_file\".")
 parser.add_argument("--log-to-file", dest="log_to_file", default=False, action="store_true", help="Log the output of the program to a log file, and not just to the console. Useful for when the tool is used on a schedule.")
+parser.add_argument("--debug", dest="debug", default=False, action="store_true", help="Set the logging level to DEBUG, for additional output helpful for troubleshooting.")
 args = parser.parse_args()
 
 # Logs directory
@@ -36,6 +37,9 @@ if args.log_to_file:
     log_file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=5000000, backupCount=5)
     log_file_handler.setFormatter(log_formatter)
     logger.addHandler(log_file_handler)
+
+if args.debug:
+    logger.setLevel(logging.DEBUG)
 
 # Let's go
 logger.info("Biztory tableau_hyper_union.py v0.2")
@@ -131,7 +135,7 @@ with THA.HyperProcess(telemetry=THA.Telemetry.SEND_USAGE_DATA_TO_TABLEAU, parame
                 
                     union_query = f"CREATE TABLE \"union_output\".{ THA.escape_name(schema.name) }.{ THA.escape_name(table.name) } AS\n"
 
-                    for index, file in enumerate(worklist):
+                    for file in worklist:
 
                         file_database_name = file.split(".")[:-1][0]
                         schema_input = THA.SchemaName(file_database_name, table.schema_name)
@@ -158,10 +162,7 @@ with THA.HyperProcess(telemetry=THA.Telemetry.SEND_USAGE_DATA_TO_TABLEAU, parame
                                         union_query += f" { THA.escape_name(args.source_file_column_name) } as { args.source_file_column_name },"
                                 # Pinch off the last comma we added (I know, it's dumb, but it works)
                                 union_query = union_query[:-1]
-                                union_query += f" FROM { THA.escape_name(file_database_name) }.{ THA.escape_name(schema.name) }.{ THA.escape_name(table_input.name) }"
-                                # Add UNION ALL if not the last one. There are more Pythonic ways but leave me alone.
-                                if index != len(worklist) - 1:
-                                    union_query += f"\nUNION ALL\n"
+                                union_query += f" FROM { THA.escape_name(file_database_name) }.{ THA.escape_name(schema.name) }.{ THA.escape_name(table_input.name) }\nUNION ALL\n"
                             except Exception as e:
                                 logger.error(f"There was a problem building the query to read the data from table { table } in file { file }. The error returned was:\n\t{e}\n\t{traceback.format_exc()}")
                                 if union_query in locals():
@@ -170,6 +171,10 @@ with THA.HyperProcess(telemetry=THA.Telemetry.SEND_USAGE_DATA_TO_TABLEAU, parame
                         
                         else:
                             logger.info(f"Table { table.name } is not present in file { file }; omitting it from the UNION query.")
+                    
+                    # Remove the last UNION ALL, if there is one. Super dumb, but probably the easiest way.
+                    if union_query.endswith(f"UNION ALL\n"):
+                        union_query = union_query[:-10]
 
                     logger.debug(f"Resulting query for table { table }:\n{ union_query }")
                     logger.info(f"Performing UNION ALL for {schema.name}.{table.name}.")

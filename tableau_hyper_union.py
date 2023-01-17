@@ -42,7 +42,7 @@ if args.debug:
     logger.setLevel(logging.DEBUG)
 
 # Let's go
-logger.info("Biztory tableau_hyper_union.py v0.2")
+logger.info("Biztory tableau_hyper_union.py v0.3")
 logger.info("Author: Timothy Vermeiren")
 logger.info(f"Script launched using (quotes removed): { sys.executable } { sys.argv[0] } { ' '.join([a for i, a in enumerate(sys.argv[1:])]) }")
 
@@ -154,7 +154,7 @@ with THA.HyperProcess(telemetry=THA.Telemetry.SEND_USAGE_DATA_TO_TABLEAU, parame
                                         union_query += f" { THA.escape_name(column.name) },"
                                     elif THA.escape_name(column.name) != THA.escape_name(args.source_file_column_name):
                                         # Source extract does not have this column
-                                        union_query += f" NULL as { THA.escape_name(column.name) },"
+                                        union_query += f" NULL::{ column.type } as { THA.escape_name(column.name) },"
                                 if len(args.source_file_column_name) > 0: # If we must add the file name
                                     if file != args.output_file:
                                         union_query += f" '{ file }' as { args.source_file_column_name },"

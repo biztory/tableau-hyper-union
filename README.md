@@ -21,7 +21,7 @@ Automatically operates on/unions all `.hyper` files in the directory _in which i
 
 * v0.1: severely under-tested and built just to solve a specific situation where files are known to have resemblant schema and table structure. Not identical, but similar. While the code includes _some_ logic to account for different schema and table structures, this hasn't been tested extensively.
 * v0.2: major efficiency improvements thanks for Adrian Vogelsgesang's feedback, now using [Hyper's own internal UNION capabilities](https://engineering.tableau.com/using-the-hyper-api-to-union-hyper-files-3fd0904fd69b) while attaching all source extracts with the same connection.
-* v0.3: fix for when source extract is missing column(s) that is/are not of a deducable type.
+* v0.3: fix for when source extract is missing column(s) that is/are not of a deducible type.
 
 ## Executable
 The Python script is rolled up into an executable with the following command:
